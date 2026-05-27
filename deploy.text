@@ -1,0 +1,5 @@
+
+git add .
+git commit -m ""
+git archive -o shulecanteen-deploy.zip HEAD  
+bash upload-to-vps.sh shulecanteen-deploy.zip  

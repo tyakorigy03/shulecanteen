@@ -1,0 +1,23 @@
+# Task: Analyze Babyeyi Pro 2.0 Project
+
+- [x] Analyze project structure <!-- id: 0 -->
+    - [x] List root and subdirectories <!-- id: 1 -->
+    - [x] Identify frontend technologies and key pages <!-- id: 2 -->
+    - [x] Investigate backend implementation <!-- id: 3 -->
+- [x] Document project architecture and features <!-- id: 4 -->
+- [x] Analyze card logic in `BabyeyiSystem\backend` <!-- id: 5 -->
+    - [x] Search for 'card' related code <!-- id: 6 -->
+    - [x] Identify key models and controllers <!-- id: 7 -->
+    - [x] Explain card-related functionality <!-- id: 8 -->
+- [x] Investigate student wallet/balance logic <!-- id: 9 -->
+    - [x] Search for 'wallet', 'balance', 'pocket money' <!-- id: 10 -->
+    - [x] Identify transaction and balance tables <!-- id: 11 -->
+    - [x] Explain how wallet integrates with cards <!-- id: 12 -->
+- [/] Design Firestore-MySQL Sync Architecture <!-- id: 13 -->
+    - [ ] Define data mapping between MySQL and Firestore <!-- id: 14 -->
+    - [ ] Propose Inbound Sync (MySQL -> Firestore) strategy <!-- id: 15 -->
+    - [ ] Propose Outbound Sync (Firestore -> MySQL) strategy <!-- id: 16 -->
+    - [ ] Address Offline Student Card Balance trade-offs <!-- id: 17 -->
+- [ ] Implement/Initialize Firebase Integration <!-- id: 18 -->
+    - [ ] Initialize Firebase SDK in `shule_canteen` <!-- id: 19 -->
+    - [ ] Set up Firestore offline persistence <!-- id: 20 -->

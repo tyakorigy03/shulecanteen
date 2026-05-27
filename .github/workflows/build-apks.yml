@@ -1,0 +1,210 @@
+name: Build APKs
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build-apks:
+    name: Driver + Seller APKs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Write .env files
+        run: |
+          # NOTE: env var is VITE_API_URL — this is what api.js reads
+          ENV="VITE_API_URL=${{ secrets.VITE_API_URL }}
+          VITE_FIREBASE_API_KEY=${{ secrets.VITE_FIREBASE_API_KEY }}
+          VITE_FIREBASE_AUTH_DOMAIN=${{ secrets.VITE_FIREBASE_AUTH_DOMAIN }}
+          VITE_FIREBASE_PROJECT_ID=${{ secrets.VITE_FIREBASE_PROJECT_ID }}
+          VITE_FIREBASE_STORAGE_BUCKET=${{ secrets.VITE_FIREBASE_STORAGE_BUCKET }}
+          VITE_FIREBASE_MESSAGING_SENDER_ID=${{ secrets.VITE_FIREBASE_MESSAGING_SENDER_ID }}
+          VITE_FIREBASE_APP_ID=${{ secrets.VITE_FIREBASE_APP_ID }}
+          VITE_PLATFORM=mobile"
+          echo "$ENV" > sulecanteen_driver_app/.env
+          echo "$ENV" > shule_canteen_seller_app/.env
+
+      - name: Debug VITE_PLATFORM presence
+        run: |
+          echo "Driver .env VITE_PLATFORM:"
+          grep '^VITE_PLATFORM' sulecanteen_driver_app/.env || echo 'missing'
+          echo "Seller .env VITE_PLATFORM:"
+          grep '^VITE_PLATFORM' shule_canteen_seller_app/.env || echo 'missing'
+          echo "CI shell VITE_PLATFORM: $VITE_PLATFORM"
+
+      # ── DRIVER ────────────────────────────────────────────
+      - name: "[Driver] Install + Capacitor"
+        working-directory: sulecanteen_driver_app
+        run: |
+          npm install
+          npm install --save @capacitor/core @capacitor/android
+          npm install --save-dev @capacitor/cli @capacitor/assets
+
+      - name: "[Driver] Install QR Scanner Dependencies"
+        working-directory: sulecanteen_driver_app
+        run: |
+          npm install @capacitor/camera
+          npm install @zxing/browser @zxing/library
+
+      - name: "[Driver] Write capacitor.config.json"
+        working-directory: sulecanteen_driver_app
+        run: |
+          cat > capacitor.config.json << 'CAP'
+          {
+            "appId": "rw.babyeyi.shulecanteen.driver",
+            "appName": "ShuleCanteen Driver",
+            "webDir": "dist",
+            "server": { "androidScheme": "https" }
+          }
+          CAP
+
+      - name: "[Driver] Build + Capacitor sync"
+        working-directory: sulecanteen_driver_app
+        env:
+          VITE_PLATFORM: mobile
+        run: |
+          npm run build
+          npx cap add android 2>/dev/null || true
+          npx cap sync android
+
+      - name: "[Driver] Add Camera Permissions to AndroidManifest"
+        working-directory: sulecanteen_driver_app/android
+        run: |
+          MANIFEST="app/src/main/AndroidManifest.xml"
+          if ! grep -q "android.permission.CAMERA" $MANIFEST; then
+            sed -i '/<uses-permission android:name="android.permission.INTERNET"\/>/a\
+        <uses-permission android:name="android.permission.CAMERA" />\
+        <uses-feature android:name="android.hardware.camera" />\
+        <uses-feature android:name="android.hardware.camera.autofocus" />' $MANIFEST
+          fi
+          echo "Camera permissions added to $MANIFEST"
+          cat $MANIFEST | grep -A2 "CAMERA"
+
+      - name: "[Driver] Generate icons from public/logo.png"
+        working-directory: sulecanteen_driver_app
+        run: |
+          mkdir -p assets
+          sudo apt-get install -y imagemagick -q
+          # Generate Icon: 1024x1024 with centered logo scaled to 600px (clean breathable margin)
+          convert public/logo.png -resize 600x600 -background white -gravity center -extent 1024x1024 assets/icon.png
+          # Generate Splash: 2732x2732 with centered logo (scaled to 800px) on brand color (#001F3F)
+          convert public/logo.png -resize 800x800 -background "#001F3F" -gravity center -extent 2732x2732 assets/splash.png
+          npx @capacitor/assets generate --android
+
+      - name: "[Driver] Bump version + decode keystore"
+        working-directory: sulecanteen_driver_app/android
+        run: |
+          sed -i "s/versionCode [0-9]*/versionCode ${{ github.run_number }}/" app/build.gradle
+          echo "${{ secrets.DRIVER_KEYSTORE_BASE64 }}" | base64 -d > app/release.keystore
+
+      - name: "[Driver] Build APK"
+        working-directory: sulecanteen_driver_app/android
+        run: |
+          ./gradlew assembleRelease --no-daemon \
+            -Pandroid.injected.signing.store.file=$(pwd)/app/release.keystore \
+            -Pandroid.injected.signing.store.password="${{ secrets.DRIVER_KEYSTORE_PASSWORD }}" \
+            -Pandroid.injected.signing.key.alias="${{ secrets.DRIVER_KEY_ALIAS }}" \
+            -Pandroid.injected.signing.key.password="${{ secrets.DRIVER_KEY_PASSWORD }}"
+
+      - name: "[Driver] Stage APK"
+        run: |
+          mkdir -p apk-out
+          cp sulecanteen_driver_app/android/app/build/outputs/apk/release/app-release.apk \
+             apk-out/ShuleCanteen-Driver-latest.apk
+
+      # ── SELLER ────────────────────────────────────────────
+      - name: "[Seller] Install + Capacitor"
+        working-directory: shule_canteen_seller_app
+        run: |
+          npm install
+          npm install --save @capacitor/core @capacitor/android
+          npm install --save-dev @capacitor/cli @capacitor/assets
+
+      - name: "[Seller] Install QR Scanner Dependencies"
+        working-directory: shule_canteen_seller_app
+        run: |
+          npm install @capacitor/camera
+          npm install @zxing/browser @zxing/library
+
+      - name: "[Seller] Write capacitor.config.json"
+        working-directory: shule_canteen_seller_app
+        run: |
+          cat > capacitor.config.json << 'CAP'
+          {
+            "appId": "rw.babyeyi.shulecanteen.seller",
+            "appName": "ShuleCanteen Seller",
+            "webDir": "dist",
+            "server": { "androidScheme": "https" }
+          }
+          CAP
+
+      - name: "[Seller] Build + Capacitor sync"
+        working-directory: shule_canteen_seller_app
+        env:
+          VITE_PLATFORM: mobile
+        run: |
+          npm run build
+          npx cap add android 2>/dev/null || true
+          npx cap sync android
+
+      - name: "[Seller] Add Camera Permissions to AndroidManifest"
+        working-directory: shule_canteen_seller_app/android
+        run: |
+          MANIFEST="app/src/main/AndroidManifest.xml"
+          if ! grep -q "android.permission.CAMERA" $MANIFEST; then
+            sed -i '/<uses-permission android:name="android.permission.INTERNET"\/>/a\
+        <uses-permission android:name="android.permission.CAMERA" />\
+        <uses-feature android:name="android.hardware.camera" />\
+        <uses-feature android:name="android.hardware.camera.autofocus" />' $MANIFEST
+          fi
+          echo "Camera permissions added to $MANIFEST"
+          cat $MANIFEST | grep -A2 "CAMERA"
+
+      - name: "[Seller] Generate icons from public/logo.png"
+        working-directory: shule_canteen_seller_app
+        run: |
+          mkdir -p assets
+          sudo apt-get install -y imagemagick -q
+          # Generate Icon: 1024x1024 with centered logo scaled to 600px (clean breathable margin)
+          convert public/logo.png -resize 600x600 -background white -gravity center -extent 1024x1024 assets/icon.png
+          # Generate Splash: 2732x2732 with centered logo (scaled to 800px) on brand color (#001F3F)
+          convert public/logo.png -resize 800x800 -background "#001F3F" -gravity center -extent 2732x2732 assets/splash.png
+          npx @capacitor/assets generate --android
+
+      - name: "[Seller] Bump version + decode keystore"
+        working-directory: shule_canteen_seller_app/android
+        run: |
+          sed -i "s/versionCode [0-9]*/versionCode ${{ github.run_number }}/" app/build.gradle
+          echo "${{ secrets.SELLER_KEYSTORE_BASE64 }}" | base64 -d > app/release.keystore
+
+      - name: "[Seller] Build APK"
+        working-directory: shule_canteen_seller_app/android
+        run: |
+          ./gradlew assembleRelease --no-daemon \
+            -Pandroid.injected.signing.store.file=$(pwd)/app/release.keystore \
+            -Pandroid.injected.signing.store.password="${{ secrets.SELLER_KEYSTORE_PASSWORD }}" \
+            -Pandroid.injected.signing.key.alias="${{ secrets.SELLER_KEY_ALIAS }}" \
+            -Pandroid.injected.signing.key.password="${{ secrets.SELLER_KEY_PASSWORD }}"
+
+      - name: "[Seller] Stage APK"
+        run: |
+          cp shule_canteen_seller_app/android/app/build/outputs/apk/release/app-release.apk \
+             apk-out/ShuleCanteen-Seller-latest.apk
+
+      # ── Save both APKs ────────────────────────────────────
+      - uses: actions/upload-artifact@v4
+        with:
+          name: apks-build-${{ github.run_number }}
+          path: apk-out/
+          retention-days: 30
