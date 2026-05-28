@@ -55,7 +55,7 @@ jobs:
         working-directory: sulecanteen_driver_app
         run: |
           npm install @capacitor/camera
-          npm install @zxing/browser @zxing/library
+          npm install @capacitor-mlkit/barcode-scanning
 
       - name: "[Driver] Write capacitor.config.json"
         working-directory: sulecanteen_driver_app
@@ -78,18 +78,31 @@ jobs:
           npx cap add android 2>/dev/null || true
           npx cap sync android
 
-      - name: "[Driver] Add Camera Permissions to AndroidManifest"
+      - name: "[Driver] Add All Required Permissions to AndroidManifest"
         working-directory: sulecanteen_driver_app/android
         run: |
           MANIFEST="app/src/main/AndroidManifest.xml"
-          if ! grep -q "android.permission.CAMERA" $MANIFEST; then
-            sed -i '/<uses-permission android:name="android.permission.INTERNET"\/>/a\
-        <uses-permission android:name="android.permission.CAMERA" />\
-        <uses-feature android:name="android.hardware.camera" />\
-        <uses-feature android:name="android.hardware.camera.autofocus" />' $MANIFEST
+          
+          # Check and add CAMERA permission
+          if ! grep -q "android.permission.CAMERA" "$MANIFEST"; then
+            awk '/<manifest/{print; print "    <uses-permission android:name=\"android.permission.CAMERA\" />"; print "    <uses-feature android:name=\"android.hardware.camera\" />"; print "    <uses-feature android:name=\"android.hardware.camera.autofocus\" />"; next}1' "$MANIFEST" > "$MANIFEST.tmp"
+            mv "$MANIFEST.tmp" "$MANIFEST"
           fi
-          echo "Camera permissions added to $MANIFEST"
-          cat $MANIFEST | grep -A2 "CAMERA"
+          
+          # Check and add READ_EXTERNAL_STORAGE permission
+          if ! grep -q "android.permission.READ_EXTERNAL_STORAGE" "$MANIFEST"; then
+            awk '/<manifest/{print; print "    <uses-permission android:name=\"android.permission.READ_EXTERNAL_STORAGE\" />"; next}1' "$MANIFEST" > "$MANIFEST.tmp"
+            mv "$MANIFEST.tmp" "$MANIFEST"
+          fi
+          
+          # Check and add WRITE_EXTERNAL_STORAGE permission (for Android 12 and below)
+          if ! grep -q "android.permission.WRITE_EXTERNAL_STORAGE" "$MANIFEST"; then
+            awk '/<manifest/{print; print "    <uses-permission android:name=\"android.permission.WRITE_EXTERNAL_STORAGE\" />"; next}1' "$MANIFEST" > "$MANIFEST.tmp"
+            mv "$MANIFEST.tmp" "$MANIFEST"
+          fi
+          
+          echo "All permissions added to $MANIFEST"
+          cat "$MANIFEST" | grep -E "permission|feature"
 
       - name: "[Driver] Generate icons from public/logo.png"
         working-directory: sulecanteen_driver_app
@@ -135,7 +148,7 @@ jobs:
         working-directory: shule_canteen_seller_app
         run: |
           npm install @capacitor/camera
-          npm install @zxing/browser @zxing/library
+          npm install @capacitor-mlkit/barcode-scanning
 
       - name: "[Seller] Write capacitor.config.json"
         working-directory: shule_canteen_seller_app
@@ -158,18 +171,31 @@ jobs:
           npx cap add android 2>/dev/null || true
           npx cap sync android
 
-      - name: "[Seller] Add Camera Permissions to AndroidManifest"
+      - name: "[Seller] Add All Required Permissions to AndroidManifest"
         working-directory: shule_canteen_seller_app/android
         run: |
           MANIFEST="app/src/main/AndroidManifest.xml"
-          if ! grep -q "android.permission.CAMERA" $MANIFEST; then
-            sed -i '/<uses-permission android:name="android.permission.INTERNET"\/>/a\
-        <uses-permission android:name="android.permission.CAMERA" />\
-        <uses-feature android:name="android.hardware.camera" />\
-        <uses-feature android:name="android.hardware.camera.autofocus" />' $MANIFEST
+          
+          # Check and add CAMERA permission
+          if ! grep -q "android.permission.CAMERA" "$MANIFEST"; then
+            awk '/<manifest/{print; print "    <uses-permission android:name=\"android.permission.CAMERA\" />"; print "    <uses-feature android:name=\"android.hardware.camera\" />"; print "    <uses-feature android:name=\"android.hardware.camera.autofocus\" />"; next}1' "$MANIFEST" > "$MANIFEST.tmp"
+            mv "$MANIFEST.tmp" "$MANIFEST"
           fi
-          echo "Camera permissions added to $MANIFEST"
-          cat $MANIFEST | grep -A2 "CAMERA"
+          
+          # Check and add READ_EXTERNAL_STORAGE permission
+          if ! grep -q "android.permission.READ_EXTERNAL_STORAGE" "$MANIFEST"; then
+            awk '/<manifest/{print; print "    <uses-permission android:name=\"android.permission.READ_EXTERNAL_STORAGE\" />"; next}1' "$MANIFEST" > "$MANIFEST.tmp"
+            mv "$MANIFEST.tmp" "$MANIFEST"
+          fi
+          
+          # Check and add WRITE_EXTERNAL_STORAGE permission (for Android 12 and below)
+          if ! grep -q "android.permission.WRITE_EXTERNAL_STORAGE" "$MANIFEST"; then
+            awk '/<manifest/{print; print "    <uses-permission android:name=\"android.permission.WRITE_EXTERNAL_STORAGE\" />"; next}1' "$MANIFEST" > "$MANIFEST.tmp"
+            mv "$MANIFEST.tmp" "$MANIFEST"
+          fi
+          
+          echo "All permissions added to $MANIFEST"
+          cat "$MANIFEST" | grep -E "permission|feature"
 
       - name: "[Seller] Generate icons from public/logo.png"
         working-directory: shule_canteen_seller_app
