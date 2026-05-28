@@ -1,10 +1,11 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { HiOutlineSearch, HiOutlineTag, HiOutlinePlus } from 'react-icons/hi';
+import { HiOutlineSearch, HiOutlineTag, HiOutlinePlus, HiOutlineDotsVertical, HiOutlineEye, HiOutlinePencil, HiOutlineTrash } from 'react-icons/hi';
 import { useCart } from '../context/CartContext';
 import { useAuth } from '../context/AuthContext';
 import { db } from '../config/firebase';
-import { collection, query, where, onSnapshot } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, deleteDoc, doc } from 'firebase/firestore';
+import API_BASE, { IMAGE_BASE } from '../config/api';
 
 const ListingPage = () => {
     const navigate = useNavigate();
@@ -14,8 +15,8 @@ const ListingPage = () => {
     const [isSticky, setIsSticky] = useState(false);
     const [inventory, setInventory] = useState([]);
     const [loading, setLoading] = useState(true);
-
-    const IMAGE_BASE = import.meta.env.VITE_API_URL || '';
+    const [contextMenu, setContextMenu] = useState({ visible: false, x: 0, y: 0, item: null });
+    const menuRef = useRef(null);
 
     useEffect(() => {
         if (!user?.schoolCode) return;
@@ -29,8 +30,7 @@ const ListingPage = () => {
                 id: doc.id,
                 ...doc.data()
             }));
-            const inStockItems = items.filter(item => (item.stock || 0) > 0);
-            setInventory(inStockItems);
+            setInventory(items);
             setLoading(false);
         }, (error) => {
             console.error("Error fetching inventory:", error);
@@ -43,9 +43,22 @@ const ListingPage = () => {
     useEffect(() => {
         const handleScroll = () => {
             setIsSticky(window.scrollY > 20);
+            setContextMenu({ visible: false, x: 0, y: 0, item: null });
         };
         window.addEventListener('scroll', handleScroll);
-        return () => window.removeEventListener('scroll', handleScroll);
+        
+        // Close context menu when clicking outside
+        const handleClickOutside = (e) => {
+            if (menuRef.current && !menuRef.current.contains(e.target)) {
+                setContextMenu({ visible: false, x: 0, y: 0, item: null });
+            }
+        };
+        document.addEventListener('click', handleClickOutside);
+        
+        return () => {
+            window.removeEventListener('scroll', handleScroll);
+            document.removeEventListener('click', handleClickOutside);
+        };
     }, []);
 
     const getImageUrl = (imagePath) => {
@@ -54,10 +67,43 @@ const ListingPage = () => {
         return `${IMAGE_BASE}${imagePath}`;
     };
 
-    // Get quantity of an item in cart
     const getItemQuantity = (itemId) => {
         const cartItem = cartItems.find(item => item.id === itemId);
         return cartItem?.quantity || 0;
+    };
+
+    const handleContextMenu = (e, item) => {
+        e.preventDefault();
+        setContextMenu({
+            visible: true,
+            x: e.clientX,
+            y: e.clientY,
+            item: item
+        });
+    };
+
+    const handleViewDetails = (item) => {
+        setContextMenu({ visible: false, x: 0, y: 0, item: null });
+        navigate(`/menu/item/${item.id}`, { state: { item } });
+    };
+
+    const handleEditItem = (item) => {
+        setContextMenu({ visible: false, x: 0, y: 0, item: null });
+        navigate(`/menu/edit/${item.id}`, { state: { item } });
+    };
+
+    const handleDeleteItem = async (item) => {
+        setContextMenu({ visible: false, x: 0, y: 0, item: null });
+        
+        if (window.confirm(`Are you sure you want to delete "${item.name}"? This action cannot be undone.`)) {
+            try {
+                await deleteDoc(doc(db, 'schools', user.schoolCode, 'inventory', item.id));
+                alert('Item deleted successfully');
+            } catch (error) {
+                console.error('Error deleting item:', error);
+                alert('Failed to delete item');
+            }
+        }
     };
 
     const filteredItems = inventory.filter(item =>
@@ -124,34 +170,36 @@ const ListingPage = () => {
                         filteredItems.map((item, index) => {
                             const quantityInCart = getItemQuantity(item.id);
                             return (
-                                <div key={item.id}>
-                                    <div
-                                        className="flex items-center justify-between p-4 hover:bg-slate-50 transition-colors cursor-pointer group"
-                                        onClick={() => addToCart(item)}
-                                    >
-                                        <div className="flex items-center space-x-4">
-                                            <div className="w-12 h-12 bg-slate-50 rounded-2xl flex items-center justify-center text-slate-300 group-hover:bg-shuleamber/10 group-hover:text-shuleamber transition-colors overflow-hidden">
-                                                {item.image ? (
-                                                    <img src={getImageUrl(item.image)} alt={item.name} className="w-full h-full object-cover" />
-                                                ) : (
-                                                    <HiOutlineTag className="text-2xl" />
+                                <div
+                                    key={item.id}
+                                    className="flex items-center justify-between p-4 hover:bg-slate-50 transition-colors cursor-pointer group"
+                                    onClick={() => addToCart(item)}
+                                    onContextMenu={(e) => handleContextMenu(e, item)}
+                                >
+                                    <div className="flex items-center space-x-4">
+                                        <div className="w-12 h-12 bg-slate-50 rounded-2xl flex items-center justify-center text-slate-300 group-hover:bg-shuleamber/10 group-hover:text-shuleamber transition-colors overflow-hidden">
+                                            {item.image ? (
+                                                <img src={getImageUrl(item.image)} alt={item.name} className="w-full h-full object-cover" />
+                                            ) : (
+                                                <HiOutlineTag className="text-2xl" />
+                                            )}
+                                        </div>
+                                        <div className="flex flex-col">
+                                            <div className="flex items-center gap-2">
+                                                <span className="text-navblue font-bold text-base leading-tight">{item.name}</span>
+                                                {item.stock < 10 && (
+                                                    <span className="text-[8px] bg-red-100 text-red-500 px-1.5 py-0.5 rounded-full font-bold">
+                                                        Low Stock
+                                                    </span>
                                                 )}
                                             </div>
-                                            <div className="flex flex-col">
-                                                <div className="flex items-center gap-2">
-                                                    <span className="text-navblue font-bold text-base leading-tight">{item.name}</span>
-                                                    {item.stock < 10 && (
-                                                        <span className="text-[8px] bg-red-100 text-red-500 px-1.5 py-0.5 rounded-full font-bold">
-                                                            Low Stock
-                                                        </span>
-                                                    )}
-                                                </div>
-                                                <span className="text-slate-400 text-xs font-semibold uppercase tracking-wider mt-0.5">
-                                                    RWF {item.price?.toLocaleString()} 
-                                                </span>
-                                            </div>
+                                            <span className="text-slate-400 text-xs font-semibold uppercase tracking-wider mt-0.5">
+                                                RWF {item.price?.toLocaleString()} 
+                                            </span>
                                         </div>
+                                    </div>
 
+                                    <div className="relative">
                                         <button
                                             className="relative w-10 h-10 rounded-full bg-slate-50 flex items-center justify-center text-slate-400 hover:bg-shuleamber hover:text-white transition-all active:scale-90"
                                             onClick={(e) => {
@@ -167,15 +215,44 @@ const ListingPage = () => {
                                             <HiOutlinePlus className="text-xl" />
                                         </button>
                                     </div>
-                                    {index < filteredItems.length - 1 && (
-                                        <div className="mx-4 border-b border-slate-100"></div>
-                                    )}
                                 </div>
                             );
                         })
                     )}
                 </div>
             </div>
+
+            {/* Context Menu */}
+            {contextMenu.visible && (
+                <div
+                    ref={menuRef}
+                    className="fixed z-50 bg-white rounded-xl shadow-xl border border-slate-100 py-2 min-w-[160px] animate-in fade-in zoom-in duration-100"
+                    style={{ top: contextMenu.y, left: contextMenu.x }}
+                >
+                    <button
+                        onClick={() => handleViewDetails(contextMenu.item)}
+                        className="w-full px-4 py-2.5 text-left text-sm font-medium text-navblue hover:bg-slate-50 transition-colors flex items-center gap-3"
+                    >
+                        <HiOutlineEye className="text-lg text-shuleamber" />
+                        View Details
+                    </button>
+                    <button
+                        onClick={() => handleEditItem(contextMenu.item)}
+                        className="w-full px-4 py-2.5 text-left text-sm font-medium text-navblue hover:bg-slate-50 transition-colors flex items-center gap-3"
+                    >
+                        <HiOutlinePencil className="text-lg text-shuleamber" />
+                        Edit Item
+                    </button>
+                    <div className="h-px bg-slate-100 my-1"></div>
+                    <button
+                        onClick={() => handleDeleteItem(contextMenu.item)}
+                        className="w-full px-4 py-2.5 text-left text-sm font-medium text-red-600 hover:bg-red-50 transition-colors flex items-center gap-3"
+                    >
+                        <HiOutlineTrash className="text-lg" />
+                        Delete Item
+                    </button>
+                </div>
+            )}
         </div>
     );
 };

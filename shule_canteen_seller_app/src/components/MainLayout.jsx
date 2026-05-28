@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { HiHome, HiPresentationChartLine, HiShoppingCart, HiDotsHorizontal, HiOutlineUserCircle, HiOutlineBell, HiOutlineTrash, HiX, HiPlus, HiOutlineTag, HiChevronLeft, HiOutlineShoppingBag, HiOutlineUser, HiOutlineAcademicCap, HiOutlineCurrencyDollar, HiOutlineBackspace, HiOutlineCamera, HiOutlineQrcode } from 'react-icons/hi';
 import { Outlet, useNavigate, useLocation, Link } from 'react-router-dom';
 import { useCart } from '../context/CartContext';
@@ -32,6 +32,7 @@ const MainLayout = () => {
 
     // Context switching logic
     const isPurchaseMode = location.pathname === '/purchases/new';
+    const isHomePage = location.pathname === '/';
 
     const activeItems = isPurchaseMode ? purchases.purchaseItems : sales.cartItems;
     const totalQuantity = isPurchaseMode ? purchases.totalQuantity : sales.totalQuantity;
@@ -44,6 +45,7 @@ const MainLayout = () => {
     const [isScanModalOpen, setIsScanModalOpen] = useState(false);
     const [isProcessing, setIsProcessing] = useState(false);
     const [isScanning, setIsScanning] = useState(false);
+    const [showFloatingCart, setShowFloatingCart] = useState(false);
     
     // Student profile states
     const [scannedStudent, setScannedStudent] = useState(null);
@@ -60,6 +62,32 @@ const MainLayout = () => {
             setIsScanning(false);
         }
     }, [isScanModalOpen]);
+
+    // Allow any child page to open the scan modal via a custom event
+    useEffect(() => {
+        const handleOpenScanModal = () => setIsScanModalOpen(true);
+        window.addEventListener('open-scan-modal', handleOpenScanModal);
+        return () => window.removeEventListener('open-scan-modal', handleOpenScanModal);
+    }, []);
+
+
+    // Detect scroll on homepage to show floating cart
+    useEffect(() => {
+        if (!isHomePage) return;
+        
+        const handleScroll = () => {
+            const cartButton = document.querySelector('.homepage-cart-button');
+            if (cartButton) {
+                const rect = cartButton.getBoundingClientRect();
+                setShowFloatingCart(rect.bottom < 0);
+            }
+        };
+        
+        window.addEventListener('scroll', handleScroll);
+        handleScroll();
+        
+        return () => window.removeEventListener('scroll', handleScroll);
+    }, [isHomePage]);
 
     const handleScanResult = async (result) => {
         if (isProcessing || isLoadingStudent) return;
@@ -120,151 +148,141 @@ const MainLayout = () => {
         }
     };
 
-const completeSale = async () => {
-    const amount = activeItems.length > 0 ? totalAmount : parseFloat(manualAmount);
-    
-    if (!amount || amount <= 0) {
-        alert('Please enter a valid amount');
-        return;
-    }
-
-    if (!scannedStudent) {
-        alert('No student selected');
-        return;
-    }
-
-    if (scannedStudent.balance < amount) {
-        alert(`❌ Insufficient Balance.\nStudent: ${scannedStudent.name}\nBalance: RWF ${scannedStudent.balance.toLocaleString()}\nRequired: RWF ${amount.toLocaleString()}`);
-        return;
-    }
-
-    setIsProcessing(true);
-
-    try {
-        const schoolCode = user.schoolCode;
+    const completeSale = async () => {
+        const amount = activeItems.length > 0 ? totalAmount : parseFloat(manualAmount);
         
-        // 1. Save sale to Firestore AND decrement inventory (Atomic Batch)
-        const batch = writeBatch(db);
-        const saleId = `SL-${Date.now()}`;
-        const saleRef = doc(collection(db, 'schools', schoolCode, 'sales'));
-        
-        const saleItems = activeItems.length > 0 
-            ? activeItems.map(item => ({
-                id: item.id,
-                name: item.name,
-                price: item.price,
-                quantity: item.quantity,
-                category: item.category || 'General'
-              }))
-            : [{ name: 'Direct Sale', quantity: 1, price: amount, category: 'General' }];
-        
-        batch.set(saleRef, {
-            id: saleId,
-            schoolCode: schoolCode,
-            studentId: scannedStudent.id,
-            studentName: scannedStudent.name,
-            studentCode: scannedStudent.code,
-            studentClass: scannedStudent.class,
-            items: saleItems,
-            totalAmount: amount,
-            operatorId: user.id || user.uid,
-            operatorName: user.fullName || user.name,
-            saleType: activeItems.length > 0 ? 'cart' : 'direct',
-            createdAt: serverTimestamp()
-        });
-
-        // Decrement inventory if cart items
-        for (const item of activeItems) {
-            const invRef = doc(db, 'schools', schoolCode, 'inventory', item.id);
-            batch.update(invRef, {
-                stock: increment(-item.quantity),
-                updatedAt: serverTimestamp()
-            });
+        if (!amount || amount <= 0) {
+            alert('Please enter a valid amount');
+            return;
         }
 
-        // 2. Update student balance in Firestore manifest
-        const manifestRef = doc(db, 'schools', schoolCode, 'data', 'students_manifest');
-        const manifestSnap = await getDoc(manifestRef);
-        
-        if (manifestSnap.exists()) {
-            const manifestData = manifestSnap.data();
-            const students = manifestData.students || [];
-            
-            // Find and update the student's balance
-            const updatedStudents = students.map(student => 
-                student.id === scannedStudent.id 
-                    ? { ...student, balance: student.balance - amount }
-                    : student
-            );
-            
-            batch.update(manifestRef, {
-                students: updatedStudents,
-                lastUpdated: serverTimestamp()
-            });
+        if (!scannedStudent) {
+            alert('No student selected');
+            return;
         }
 
-        await batch.commit();
+        if (scannedStudent.balance < amount) {
+            alert(`❌ Insufficient Balance.\nStudent: ${scannedStudent.name}\nBalance: RWF ${scannedStudent.balance.toLocaleString()}\nRequired: RWF ${amount.toLocaleString()}`);
+            return;
+        }
 
-        // 3. Send ONE request to backend to handle MySQL balance deduction AND parent notification
-        const response = await fetch(`${API_BASE}/sales/process`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
+        setIsProcessing(true);
+
+        try {
+            const schoolCode = user.schoolCode;
+            
+            const batch = writeBatch(db);
+            const saleId = `SL-${Date.now()}`;
+            const saleRef = doc(collection(db, 'schools', schoolCode, 'sales'));
+            
+            const saleItems = activeItems.length > 0 
+                ? activeItems.map(item => ({
+                    id: item.id,
+                    name: item.name,
+                    price: item.price,
+                    quantity: item.quantity,
+                    category: item.category || 'General'
+                  }))
+                : [{ name: 'Direct Sale', quantity: 1, price: amount, category: 'General' }];
+            
+            batch.set(saleRef, {
+                id: saleId,
+                schoolCode: schoolCode,
                 studentId: scannedStudent.id,
                 studentName: scannedStudent.name,
                 studentCode: scannedStudent.code,
                 studentClass: scannedStudent.class,
-                amount: amount,
-                schoolCode: schoolCode,
                 items: saleItems,
-                saleId: saleId,
-                operatorName: user.fullName || user.name
-            })
-        });
-        
-        const result = await response.json();
-        
-        if (!result.success) {
-            console.error("Backend processing failed:", result.message);
-            alert(`⚠️ Sale recorded locally but balance sync pending. Please contact support.\n${result.message}`);
+                totalAmount: amount,
+                operatorId: user.id || user.uid,
+                operatorName: user.fullName || user.name,
+                saleType: activeItems.length > 0 ? 'cart' : 'direct',
+                createdAt: serverTimestamp()
+            });
+
+            for (const item of activeItems) {
+                const invRef = doc(db, 'schools', schoolCode, 'inventory', item.id);
+                batch.update(invRef, {
+                    stock: increment(-item.quantity),
+                    updatedAt: serverTimestamp()
+                });
+            }
+
+            const manifestRef = doc(db, 'schools', schoolCode, 'data', 'students_manifest');
+            const manifestSnap = await getDoc(manifestRef);
+            
+            if (manifestSnap.exists()) {
+                const manifestData = manifestSnap.data();
+                const students = manifestData.students || [];
+                
+                const updatedStudents = students.map(student => 
+                    student.id === scannedStudent.id 
+                        ? { ...student, balance: student.balance - amount }
+                        : student
+                );
+                
+                batch.update(manifestRef, {
+                    students: updatedStudents,
+                    lastUpdated: serverTimestamp()
+                });
+            }
+
+            await batch.commit();
+
+            const response = await fetch(`${API_BASE}/sales/process`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    studentId: scannedStudent.id,
+                    studentName: scannedStudent.name,
+                    studentCode: scannedStudent.code,
+                    studentClass: scannedStudent.class,
+                    amount: amount,
+                    schoolCode: schoolCode,
+                    items: saleItems,
+                    saleId: saleId,
+                    operatorName: user.fullName || user.name
+                })
+            });
+            
+            const result = await response.json();
+            
+            if (!result.success) {
+                console.error("Backend processing failed:", result.message);
+                alert(`⚠️ Sale recorded locally but balance sync pending. Please contact support.\n${result.message}`);
+            }
+
+            const newBalance = scannedStudent.balance - amount;
+            setScannedStudent(prev => ({
+                ...prev,
+                balance: newBalance
+            }));
+
+            const userChoice = window.confirm(
+                `✅ Sale Successful!\n\n${scannedStudent.name} - RWF ${amount.toLocaleString()}\nBalance remaining: RWF ${newBalance.toLocaleString()}\n\nOK - Make another sale\nCancel - View sales history`
+            );
+
+            sales.clearCart();
+            setManualAmount('');
+            
+            if (userChoice) {
+                setScannedStudent(null);
+                setShowAmountEntry(false);
+                setIsScanning(false);
+            } else {
+                setScannedStudent(null);
+                setShowAmountEntry(false);
+                setIsScanModalOpen(false);
+                navigate('/sales');
+            }
+
+        } catch (error) {
+            console.error("Sale Error:", error);
+            alert(`Error: ${error.message}`);
+        } finally {
+            setIsProcessing(false);
         }
-
-        // Update local student balance for UI
-        const newBalance = scannedStudent.balance - amount;
-        setScannedStudent(prev => ({
-            ...prev,
-            balance: newBalance
-        }));
-
-        // Show success dialog with options
-        const userChoice = window.confirm(
-            `✅ Sale Successful!\n\n${scannedStudent.name} - RWF ${amount.toLocaleString()}\nBalance remaining: RWF ${newBalance.toLocaleString()}\n\nOK - Make another sale\nCancel - View sales history`
-        );
-
-        // Cleanup
-        sales.clearCart();
-        setManualAmount('');
-        
-        if (userChoice) {
-            // Continue to another sale - reset and stay in modal
-            setScannedStudent(null);
-            setShowAmountEntry(false);
-            setIsScanning(false);
-        } else {
-            // Go to sales page
-            setScannedStudent(null);
-            setShowAmountEntry(false);
-            setIsScanModalOpen(false);
-            navigate('/sales');
-        }
-
-    } catch (error) {
-        console.error("Sale Error:", error);
-        alert(`Error: ${error.message}`);
-    } finally {
-        setIsProcessing(false);
-    }
-};
+    };
 
     const handleNumpadPress = (key) => {
         if (key === '⌫') {
@@ -278,7 +296,6 @@ const completeSale = async () => {
     };
 
     const isCartActive = totalQuantity > 0;
-    const isHomePage = location.pathname === '/';
 
     const getTitle = () => {
         switch (true) {
@@ -335,7 +352,7 @@ const completeSale = async () => {
     ];
 
     const shouldShowBottomNav = () => {
-        const hiddenPaths = ['/purchase/discover/', '/purchases/checkout', '/purchases/confirm', '/purchases/receipt', '/account', '/notifications', '/account/cashout'];
+        const hiddenPaths = ['/purchase/discover/', '/purchases/checkout', '/purchases/confirm', '/purchases/receipt', '/account', '/notifications', '/account/cashout', '/menu/add-item', '/menu/edit', '/menu/item'];
         return !hiddenPaths.some(path => location.pathname.startsWith(path));
     };
 
@@ -376,6 +393,26 @@ const completeSale = async () => {
                 </div>
             )}
 
+            {/* Floating Cart Button - Only on homepage when scrolled past cart */}
+            {isHomePage && showFloatingCart && isCartActive && (
+                <div 
+                    onClick={() => {
+                        const cartButton = document.querySelector('.homepage-cart-button');
+                        if (cartButton) cartButton.click();
+                    }}
+                    className="fixed bottom-24 right-4 z-50 bg-shuleamber text-navblue rounded-full p-3 shadow-lg cursor-pointer hover:scale-110 transition-all active:scale-95 animate-in fade-in slide-in-from-right-5"
+                >
+                    <div className="relative">
+                        <HiOutlineShoppingBag className="text-2xl" />
+                        {totalQuantity > 0 && (
+                            <span className="absolute -top-2 -right-2 w-5 h-5 bg-navblue text-white text-[10px] font-bold rounded-full flex items-center justify-center">
+                                {totalQuantity}
+                            </span>
+                        )}
+                    </div>
+                </div>
+            )}
+
             {/* Scan Popover Modal */}
             {isScanModalOpen && (
                 <div
@@ -383,257 +420,247 @@ const completeSale = async () => {
                     onClick={() => setIsScanModalOpen(false)}
                 >
                     <div className="relative w-full max-w-md bg-shuleamber rounded-[32px] p-5 shadow-2xl flex flex-col max-h-[85vh] min-h-0">
-                    <div
-                        className="flex-1 overflow-y-auto"
-                        onClick={(e) => e.stopPropagation()}
-                    >
-                        {/* Header */}
-                        <div className="flex justify-between items-start mb-4">
-                            <div className="flex flex-col">
-                                <span className="text-navblue/40 text-[10px] font-black uppercase tracking-widest leading-none">
-                                    {activeItems.length > 0 ? 'Current Cart' : (scannedStudent ? 'Direct Sale' : 'Scan Card')}
-                                </span>
-                                <div className="flex items-center space-x-2 mt-1">
-                                    {activeItems.length > 0 ? (
-                                        <>
-                                            <span className="text-navblue text-2xl font-black">{totalQuantity} Items</span>
-                                        </>
-                                    ) : scannedStudent ? (
-                                        <HiOutlineCurrencyDollar className="text-navblue text-xl" />
-                                    ) : (
-                                        <HiOutlineQrcode className="text-navblue text-xl" />
-                                    )}
+                        <div
+                            className="flex-1 overflow-y-auto"
+                            onClick={(e) => e.stopPropagation()}
+                        >
+                            {/* Header */}
+                            <div className="flex justify-between items-start mb-4">
+                                <div className="flex flex-col">
+                                    <span className="text-navblue/40 text-[10px] font-black uppercase tracking-widest leading-none">
+                                        {activeItems.length > 0 ? 'Current Cart' : (scannedStudent ? 'Direct Sale' : 'Scan Card')}
+                                    </span>
+                                    <div className="flex items-center space-x-2 mt-1">
+                                        {activeItems.length > 0 ? (
+                                            <>
+                                                <span className="text-navblue text-2xl font-black">{totalQuantity} Items</span>
+                                            </>
+                                        ) : scannedStudent ? (
+                                            <HiOutlineCurrencyDollar className="text-navblue text-xl" />
+                                        ) : (
+                                            <HiOutlineQrcode className="text-navblue text-xl" />
+                                        )}
+                                    </div>
                                 </div>
+                                {displayAmount > 0 && (
+                                    <div className="text-right">
+                                        <p className="text-navblue/40 text-[8px] font-black uppercase tracking-widest">Amount to Deduct</p>
+                                        <p className="text-navblue font-black text-2xl leading-none">RWF {displayAmount.toLocaleString()}</p>
+                                    </div>
+                                )}
+                                <button
+                                    onClick={() => setIsScanModalOpen(false)}
+                                    className="w-8 h-8 rounded-full bg-white/10 p-2 rounded-full text-navblue hover:bg-red-500 hover:text-white transition-all"
+                                >
+                                    <HiX className="text-lg" />
+                                </button>
                             </div>
-                            {displayAmount > 0 && (
-                                <div className="text-right">
-                                    <p className="text-navblue/40 text-[8px] font-black uppercase tracking-widest">Amount to Deduct</p>
-                                    <p className="text-navblue font-black text-2xl leading-none">RWF {displayAmount.toLocaleString()}</p>
-                                </div>
-                            )}
-                            <button
-                                onClick={() => setIsScanModalOpen(false)}
-                                className="w-8 h-8 rounded-full bg-white/10 p-2 rounded-full text-navblue hover:bg-red-500 hover:text-white transition-all"
-                            >
-                                <HiX className="text-lg" />
-                            </button>
-                        </div>
 
-                        {/* Items List inside Popover (only if cart has items) */}
-                        {activeItems.length > 0 && (
-                            <div className="bg-white/20 backdrop-blur-md rounded-[24px] overflow-hidden mb-4 overflow-y-auto border border-white/20 flex-shrink min-h-0 max-h-40">
-                                {activeItems.map((item, index) => (
-                                    <div key={item.id}>
-                                        <div className="flex items-center justify-between p-4 px-5">
-                                            <div className="flex items-center space-x-4">
-                                                <div className="relative w-9 h-9 bg-white/40 rounded-xl flex items-center justify-center text-navblue">
-                                                    <HiOutlineTag className="text-lg opacity-40" />
-                                                    <div className="absolute -top-1 -right-1 w-4.5 h-4.5 text-[9px] font-black rounded-full flex items-center justify-center bg-navblue text-white border-2 border-shuleamber">
-                                                        {item.quantity}
+                            {/* Items List inside Popover (only if cart has items) */}
+                            {activeItems.length > 0 && (
+                                <div className="bg-white/20 backdrop-blur-md rounded-[24px] overflow-hidden mb-4 overflow-y-auto border border-white/20 flex-shrink min-h-0 max-h-40">
+                                    {activeItems.map((item, index) => (
+                                        <div key={item.id}>
+                                            <div className="flex items-center justify-between p-4 px-5">
+                                                <div className="flex items-center space-x-4">
+                                                    <div className="relative w-9 h-9 bg-white/40 rounded-xl flex items-center justify-center text-navblue">
+                                                        <HiOutlineTag className="text-lg opacity-40" />
+                                                        <div className="absolute -top-1 -right-1 w-4.5 h-4.5 text-[9px] font-black rounded-full flex items-center justify-center bg-navblue text-white border-2 border-shuleamber">
+                                                            {item.quantity}
+                                                        </div>
+                                                    </div>
+                                                    <div className="flex flex-col">
+                                                        <span className="font-bold text-sm text-navblue leading-tight">{item.name}</span>
+                                                        <span className="text-[10px] font-black text-navblue/40 uppercase">
+                                                            {item.price} RWF * {item.quantity} = RWF {(item.price * item.quantity).toLocaleString()}
+                                                        </span>
                                                     </div>
                                                 </div>
-                                                <div className="flex flex-col">
-                                                    <span className="font-bold text-sm text-navblue leading-tight">{item.name}</span>
-                                                    <span className="text-[10px] font-black text-navblue/40 uppercase">
-                                                        {item.price} RWF * {item.quantity} = RWF {(item.price * item.quantity).toLocaleString()}
-                                                    </span>
-                                                </div>
+                                                <button
+                                                    onClick={() => removeItem(item.id)}
+                                                    className="w-7 h-7 bg-white/20 rounded-full flex items-center justify-center text-navblue/40 hover:text-red-500 transition-colors"
+                                                >
+                                                    <HiX className="text-xs" />
+                                                </button>
                                             </div>
-                                            <button
-                                                onClick={() => removeItem(item.id)}
-                                                className="w-7 h-7 bg-white/20 rounded-full flex items-center justify-center text-navblue/40 hover:text-red-500 transition-colors"
-                                            >
-                                                <HiX className="text-xs" />
-                                            </button>
+                                            {index < activeItems.length - 1 && (
+                                                <div className="mx-5 border-b border-navblue/5"></div>
+                                            )}
                                         </div>
-                                        {index < activeItems.length - 1 && (
-                                            <div className="mx-5 border-b border-navblue/5"></div>
-                                        )}
-                                    </div>
-                                ))}
-                            </div>
-                        )}
-
-                        {/* Content */}
-                        {!scannedStudent && !isScanning ? (
-                            // Start screen
-                            <div className="flex flex-col items-center justify-center py-8 space-y-6">
-                                <img src={shuleCardWhite} className="w-20" alt="Shule Card" />
-                                <div className="text-center space-y-2">
-                                    <h3 className="text-white font-black text-lg">Scan Student Card</h3>
-                                    <p className="text-white/80 text-sm max-w-[250px]">
-                                        Position the QR code within the frame to identify the student
-                                    </p>
+                                    ))}
                                 </div>
-                                <button
-                                    onClick={() => setIsScanning(true)}
-                                    className="bg-white text-navblue px-8 py-3 rounded-xl font-bold text-sm hover:bg-opacity-90 transition-all active:scale-95 flex items-center gap-2"
-                                >
-                                    <HiOutlineCamera className="text-lg" />
-                                    Start Scanning
-                                </button>
-                            </div>
-                        ) : !scannedStudent && isScanning ? (
-                            // Scanner active
-                            <div className="aspect-square bg-navblue rounded-[28px] relative overflow-hidden flex items-center justify-center group flex-shrink-0">
-                                {isLoadingStudent ? (
-                                    <div className="flex flex-col items-center justify-center">
-                                        <div className="w-10 h-10 border-4 border-white/20 border-t-shuleamber rounded-full animate-spin"></div>
-                                        <p className="text-white mt-3 text-xs">Loading...</p>
+                            )}
+
+                            {/* Content */}
+                            {!scannedStudent && !isScanning ? (
+                                <div className="flex flex-col items-center justify-center py-8 space-y-6">
+                                    <img src={shuleCardWhite} className="w-20" alt="Shule Card" />
+                                    <div className="text-center space-y-2">
+                                        <h3 className="text-white font-black text-lg">Scan Student Card</h3>
+                                        <p className="text-white/80 text-sm max-w-[250px]">
+                                            Position the QR code within the frame to identify the student
+                                        </p>
                                     </div>
-                                ) : (
-                                    <QRScanner onScan={handleScanResult} />
-                                )}
-                                <div className="absolute top-8 left-8 w-12 h-12 border-l-4 border-t-4 border-shuleamber rounded-tl-xl shadow-[0_0_15px_rgba(245,158,11,0.3)] z-10"></div>
-                                <div className="absolute top-8 right-8 w-12 h-12 border-r-4 border-t-4 border-shuleamber rounded-tr-xl z-10"></div>
-                                <div className="absolute bottom-8 left-8 w-12 h-12 border-l-4 border-b-4 border-shuleamber rounded-bl-xl z-10"></div>
-                                <div className="absolute bottom-8 right-8 w-12 h-12 border-r-4 border-b-4 border-shuleamber rounded-br-xl z-10"></div>
-                                <div className="absolute top-1/2 left-10 right-10 h-0.5 bg-shuleamber/40 shadow-[0_0_20px_#F59E0B] animate-pulse z-10"></div>
-                                <button
-                                    onClick={() => setIsScanning(false)}
-                                    className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-black/50 text-white px-4 py-1.5 rounded-full text-xs font-medium"
-                                >
-                                    Cancel
-                                </button>
-                            </div>
-                        ) : activeItems.length > 0 ? (
-                            // Cart items - confirm button
-                            <div className="bg-white/20 backdrop-blur-md rounded-2xl p-4 space-y-4  shadow-sm">
-                                <div className="flex items-center gap-3">
-                                    <div className="w-14 h-14 rounded-full bg-navblue/10 flex items-center justify-center">
-                                        <HiOutlineUser className="text-2xl text-navblue" />
-                                    </div>
-                                    <div className="flex-1">
-                                        <h4 className="text-navblue font-bold text-base">{scannedStudent.name}</h4>
-                                        <div className="flex items-center gap-3 mt-1">
-                                            <span className="text-xs text-slate-500 flex items-center gap-1">
-                                                <HiOutlineAcademicCap className="text-xs" />
-                                                {scannedStudent.class}
-                                            </span>
-                                            <span className="text-xs font-bold text-green-600 flex items-center gap-1">
-                                                Balance: RWF {scannedStudent.balance.toLocaleString()}
-                                            </span>
+                                    <button
+                                        onClick={() => setIsScanning(true)}
+                                        className="bg-white text-navblue px-8 py-3 rounded-xl font-bold text-sm hover:bg-opacity-90 transition-all active:scale-95 flex items-center gap-2"
+                                    >
+                                        <HiOutlineCamera className="text-lg" />
+                                        Start Scanning
+                                    </button>
+                                </div>
+                            ) : !scannedStudent && isScanning ? (
+                                <div className="aspect-square bg-navblue rounded-[28px] relative overflow-hidden flex items-center justify-center group flex-shrink-0">
+                                    {isLoadingStudent ? (
+                                        <div className="flex flex-col items-center justify-center">
+                                            <div className="w-10 h-10 border-4 border-white/20 border-t-shuleamber rounded-full animate-spin"></div>
+                                            <p className="text-white mt-3 text-xs">Loading...</p>
+                                        </div>
+                                    ) : (
+                                        <QRScanner onScan={handleScanResult} />
+                                    )}
+                                    <div className="absolute top-8 left-8 w-12 h-12 border-l-4 border-t-4 border-shuleamber rounded-tl-xl shadow-[0_0_15px_rgba(245,158,11,0.3)] z-10"></div>
+                                    <div className="absolute top-8 right-8 w-12 h-12 border-r-4 border-t-4 border-shuleamber rounded-tr-xl z-10"></div>
+                                    <div className="absolute bottom-8 left-8 w-12 h-12 border-l-4 border-b-4 border-shuleamber rounded-bl-xl z-10"></div>
+                                    <div className="absolute bottom-8 right-8 w-12 h-12 border-r-4 border-b-4 border-shuleamber rounded-br-xl z-10"></div>
+                                    <div className="absolute top-1/2 left-10 right-10 h-0.5 bg-shuleamber/40 shadow-[0_0_20px_#F59E0B] animate-pulse z-10"></div>
+                                    <button
+                                        onClick={() => setIsScanning(false)}
+                                        className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-black/50 text-white px-4 py-1.5 rounded-full text-xs font-medium"
+                                    >
+                                        Cancel
+                                    </button>
+                                </div>
+                            ) : activeItems.length > 0 ? (
+                                <div className="bg-white/20 backdrop-blur-md rounded-2xl p-4 space-y-4 shadow-sm">
+                                    <div className="flex items-center gap-3">
+                                        <div className="w-14 h-14 rounded-full bg-navblue/10 flex items-center justify-center">
+                                            <HiOutlineUser className="text-2xl text-navblue" />
+                                        </div>
+                                        <div className="flex-1">
+                                            <h4 className="text-navblue font-bold text-base">{scannedStudent.name}</h4>
+                                            <div className="flex items-center gap-3 mt-1">
+                                                <span className="text-xs text-slate-500 flex items-center gap-1">
+                                                    <HiOutlineAcademicCap className="text-xs" />
+                                                    {scannedStudent.class}
+                                                </span>
+                                                <span className="text-lg font-bold text-white flex items-center gap-1">
+                                                    Balance: RWF {scannedStudent.balance.toLocaleString()}
+                                                </span>
+                                            </div>
                                         </div>
                                     </div>
-                                </div>
-                                <div className="flex gap-2">
-                                    <button
-                                        onClick={() => {
-                                            setScannedStudent(null);
-                                            setManualAmount('');
-                                            setShowAmountEntry(false);
-                                            setIsScanning(false);
-                                        }}
-                                        className="flex-1 bg-slate-100 text-slate-600 py-3 rounded-xl font-medium text-sm hover:bg-slate-200 transition-all"
-                                    >
-                                        Back
-                                    </button>
-                                    <button
-                                        onClick={completeSale}
-                                        disabled={isProcessing}
-                                        className="flex-1 bg-shuleamber text-navblue py-3 rounded-xl font-bold text-sm hover:scale-105 transition-all disabled:opacity-50"
-                                    >
-                                        {isProcessing ? (
-                                            <div className="w-5 h-5 border-2 border-navblue/20 border-t-navblue rounded-full animate-spin mx-auto"></div>
-                                        ) : (
-                                            `Confirm RWF ${totalAmount.toLocaleString()}`
-                                        )}
-                                    </button>
-                                </div>
-                            </div>
-                        ) : (
-                            // Direct sale - amount entry
-                            <div className="bg-white/20 backdrop-blur-md rounded-2xl p-4 space-y-4  shadow-sm">
-                                {/* Student Info */}
-                                <div className="flex items-center gap-3 pb-3 border-b border-gray-100">
-                                    <div className="w-12 h-12 rounded-full bg-navblue/10 flex items-center justify-center">
-                                        <HiOutlineUser className="text-xl text-navblue" />
+                                    <div className="flex gap-2">
+                                        <button
+                                            onClick={() => {
+                                                setScannedStudent(null);
+                                                setManualAmount('');
+                                                setShowAmountEntry(false);
+                                                setIsScanning(false);
+                                            }}
+                                            className="flex-1 bg-slate-100 text-slate-600 py-3 rounded-xl font-medium text-sm hover:bg-slate-200 transition-all"
+                                        >
+                                            Back
+                                        </button>
+                                        <button
+                                            onClick={completeSale}
+                                            disabled={isProcessing}
+                                            className="flex-1 bg-shuleamber text-navblue py-3 rounded-xl font-bold text-sm hover:scale-105 transition-all disabled:opacity-50"
+                                        >
+                                            {isProcessing ? (
+                                                <div className="w-5 h-5 border-2 border-navblue/20 border-t-navblue rounded-full animate-spin mx-auto"></div>
+                                            ) : (
+                                                `Confirm RWF ${totalAmount.toLocaleString()}`
+                                            )}
+                                        </button>
                                     </div>
-                                    <div className="flex-1">
-                                        <h4 className="text-navblue font-bold text-sm">{scannedStudent.name}</h4>
-                                        <div className="flex items-center gap-2 mt-0.5">
-                                            <span className="text-[10px] text-slate-500">{scannedStudent.class}</span>
-                                            <span className="text-[10px] font-bold text-green-600">Balance: RWF {scannedStudent.balance.toLocaleString()}</span>
+                                </div>
+                            ) : (
+                                <div className="bg-white/20 backdrop-blur-md rounded-2xl p-4 space-y-4 shadow-sm">
+                                    <div className="flex items-center gap-3 pb-3 border-b border-gray-100">
+                                        <div className="w-12 h-12 rounded-full bg-navblue/10 flex items-center justify-center">
+                                            <HiOutlineUser className="text-xl text-navblue" />
                                         </div>
-                                    </div>
-                                    <button
-                                        onClick={() => {
-                                            setScannedStudent(null);
-                                            setManualAmount('');
-                                            setShowAmountEntry(false);
-                                            setIsScanning(false);
-                                        }}
-                                        className="text-xs text-red-500 font-medium"
-                                    >
-                                        Change
-                                    </button>
-                                </div>
-
-                                {/* Amount Display */}
-                                <div className="bg-slate-50 rounded-xl p-4 text-center">
-                                    <p className="text-slate-400 text-xs mb-1">Amount to Deduct</p>
-                                    <span className="text-3xl font-black text-navblue">
-                                        {manualAmount ? `RWF ${parseInt(manualAmount).toLocaleString()}` : 'RWF 0'}
-                                    </span>
-                                </div>
-
-                                {/* Custom Numpad */}
-                                <div className="space-y-3">
-                                    <div className="grid grid-cols-3 gap-2">
-                                        {numpadKeys.map((key, i) => (
-                                            <button
-                                                key={i}
-                                                disabled={key === ''}
-                                                onClick={() => handleNumpadPress(key)}
-                                                className={`
-                                                    h-12 rounded-xl font-black text-xl transition-all active:scale-95 select-none
-                                                    ${key === ''
-                                                        ? 'invisible'
-                                                        : key === '⌫'
-                                                            ? 'bg-slate-100 text-slate-500 text-lg'
-                                                            : 'bg-slate-100 text-navblue hover:bg-slate-200'
-                                                    }
-                                                `}
-                                            >
-                                                {key}
-                                            </button>
-                                        ))}
+                                        <div className="flex-1">
+                                            <h4 className="text-navblue font-bold text-sm">{scannedStudent.name}</h4>
+                                            <div className="flex items-center gap-2 mt-0.5">
+                                                <span className="text-[10px] text-slate-500">{scannedStudent.class}</span>
+                                                <span className="text-[10px] font-bold text-green-600">Balance: RWF {scannedStudent.balance.toLocaleString()}</span>
+                                            </div>
+                                        </div>
+                                        <button
+                                            onClick={() => {
+                                                setScannedStudent(null);
+                                                setManualAmount('');
+                                                setShowAmountEntry(false);
+                                                setIsScanning(false);
+                                            }}
+                                            className="text-xs text-red-500 font-medium"
+                                        >
+                                            Change
+                                        </button>
                                     </div>
 
-                                    {/* Scan & Pay Button (renamed from Continue) */}
-                                    <button
-                                        onClick={completeSale}
-                                        disabled={isProcessing || !manualAmount || parseFloat(manualAmount) <= 0}
-                                        className="w-full bg-navblue text-white py-3.5 rounded-xl font-black text-sm tracking-wide hover:bg-navblue/90 transition-all disabled:opacity-40 active:scale-95"
-                                    >
-                                        {isProcessing ? (
-                                            <div className="w-5 h-5 border-2 border-white/20 border-t-white rounded-full animate-spin mx-auto"></div>
-                                        ) : (
-                                            'Confirm & Pay'
-                                        )}
-                                    </button>
-                                </div>
-                            </div>
-                        )}
+                                    <div className="bg-slate-50 rounded-xl p-4 text-center">
+                                        <p className="text-slate-400 text-xs mb-1">Amount to Deduct</p>
+                                        <span className="text-3xl font-black text-navblue">
+                                            {manualAmount ? `RWF ${parseInt(manualAmount).toLocaleString()}` : 'RWF 0'}
+                                        </span>
+                                    </div>
 
-                        {/* Tooltip Triangle */}
-                        <div className="absolute -bottom-4 left-1/2 -translate-x-1/2 w-8 h-8 bg-shuleamber rotate-45 rounded-sm shadow-2xl"></div>
-                    </div>
-                    <div className="absolute -bottom-4 left-1/2 -translate-x-1/2 w-8 h-8 bg-shuleamber rotate-45 rounded-sm"></div>
+                                    <div className="space-y-3">
+                                        <div className="grid grid-cols-3 gap-2">
+                                            {numpadKeys.map((key, i) => (
+                                                <button
+                                                    key={i}
+                                                    disabled={key === ''}
+                                                    onClick={() => handleNumpadPress(key)}
+                                                    className={`
+                                                        h-12 rounded-xl font-black text-xl transition-all active:scale-95 select-none
+                                                        ${key === ''
+                                                            ? 'invisible'
+                                                            : key === '⌫'
+                                                                ? 'bg-slate-100 text-slate-500 text-lg'
+                                                                : 'bg-slate-100 text-navblue hover:bg-slate-200'
+                                                        }
+                                                    `}
+                                                >
+                                                    {key}
+                                                </button>
+                                            ))}
+                                        </div>
+
+                                        <button
+                                            onClick={completeSale}
+                                            disabled={isProcessing || !manualAmount || parseFloat(manualAmount) <= 0}
+                                            className="w-full bg-navblue text-white py-3.5 rounded-xl font-black text-sm tracking-wide hover:bg-navblue/90 transition-all disabled:opacity-40 active:scale-95"
+                                        >
+                                            {isProcessing ? (
+                                                <div className="w-5 h-5 border-2 border-white/20 border-t-white rounded-full animate-spin mx-auto"></div>
+                                            ) : (
+                                                'Confirm & Pay'
+                                            )}
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                        <div className="absolute -bottom-4 left-1/2 -translate-x-1/2 w-8 h-8 bg-shuleamber rotate-45 rounded-sm"></div>
                     </div>
                 </div>
             )}
 
             {/* Top Header */}
-            <div className={`fixed top-0 left-0 right-0 z-50 transition-all duration-300 shadow-lg ${isCartActive
-                ? (isPurchaseMode ? 'bg-navblue text-white border-b border-white/10' : 'bg-shuleamber text-navblue')
-                : 'bg-navblue text-white'
+            <div className={`fixed top-0 left-0 right-0 z-50 transition-all duration-300 shadow-lg ${
+                isCartActive && !isHomePage
+                    ? (isPurchaseMode ? 'bg-navblue text-white border-b border-white/10' : 'bg-shuleamber text-navblue')
+                    : 'bg-navblue text-white'
                 }`}>
                 <header
                     className="px-6 py-3 flex items-center justify-between cursor-pointer min-h-[64px]"
-                    onClick={() => isCartActive && setIsCartExpanded(!isCartExpanded)}
+                    onClick={() => isCartActive && !isHomePage && setIsCartExpanded(!isCartExpanded)}
                 >
-                    {isCartActive ? (
+                    {isCartActive && !isHomePage ? (
                         <>
                             <div className="flex flex-col">
                                 <span className={`text-[10px] font-black uppercase tracking-widest ${isPurchaseMode ? 'text-white/40' : 'opacity-60'}`}>
@@ -708,69 +735,71 @@ const completeSale = async () => {
                     )}
                 </header>
 
-                {/* Expandable Cart Details */}
-                <div className={`overflow-hidden transition-all duration-300 ease-in-out ${isCartExpanded && isCartActive ? 'max-h-screen border-t border-black/5' : 'max-h-0'
-                    }`}>
-                    <div className={`p-4 space-y-4 backdrop-blur-md h-[calc(100vh-64px)] overflow-y-auto outline-none ${isPurchaseMode ? 'bg-navblue/95 border-t border-white/10' : 'bg-white/20'
+                {/* Expandable Cart Details - Only on non-homepage */}
+                {!isHomePage && (
+                    <div className={`overflow-hidden transition-all duration-300 ease-in-out ${isCartExpanded && isCartActive ? 'max-h-screen border-t border-black/5' : 'max-h-0'
                         }`}>
-                        <div className={`rounded-[24px] overflow-hidden space-y-2 ${isPurchaseMode ? 'bg-white/5 border border-white/10' : 'bg-white/40 backdrop-blur-sm'
+                        <div className={`p-4 space-y-4 backdrop-blur-md h-[calc(100vh-64px)] overflow-y-auto outline-none ${isPurchaseMode ? 'bg-navblue/95 border-t border-white/10' : 'bg-white/20'
                             }`}>
-                            {activeItems.map((item, index) => (
-                                <div key={item.id}>
-                                    <div className="flex items-center justify-between p-4 transition-colors group">
-                                        <div className="flex items-center space-x-4">
-                                            <div className={`relative w-10 h-10 rounded-xl flex items-center justify-center ${isPurchaseMode ? 'bg-white/10 text-shuleamber' : 'bg-navblue/10 text-navblue'
-                                                }`}>
-                                                <HiOutlineTag className="text-xl opacity-40" />
-                                                <div className={`absolute -top-1 -right-1 w-5 h-5 text-[10px] font-black rounded-full flex items-center justify-center border-2 ${isPurchaseMode ? 'bg-shuleamber text-navblue border-navblue' : 'bg-navblue text-white border-shuleamber'
+                            <div className={`rounded-[24px] overflow-hidden space-y-2 ${isPurchaseMode ? 'bg-white/5 border border-white/10' : 'bg-white/40 backdrop-blur-sm'
+                                }`}>
+                                {activeItems.map((item, index) => (
+                                    <div key={item.id}>
+                                        <div className="flex items-center justify-between p-4 transition-colors group">
+                                            <div className="flex items-center space-x-4">
+                                                <div className={`relative w-10 h-10 rounded-xl flex items-center justify-center ${isPurchaseMode ? 'bg-white/10 text-shuleamber' : 'bg-navblue/10 text-navblue'
                                                     }`}>
-                                                    {item.quantity}
+                                                    <HiOutlineTag className="text-xl opacity-40" />
+                                                    <div className={`absolute -top-1 -right-1 w-5 h-5 text-[10px] font-black rounded-full flex items-center justify-center border-2 ${isPurchaseMode ? 'bg-shuleamber text-navblue border-navblue' : 'bg-navblue text-white border-shuleamber'
+                                                        }`}>
+                                                        {item.quantity}
+                                                    </div>
+                                                </div>
+                                                <div className="flex flex-col">
+                                                    <span className={`font-bold text-base leading-tight ${isPurchaseMode ? 'text-white' : 'text-navblue'}`}>{item.name}</span>
+                                                    <span className={`text-xs font-semibold uppercase tracking-wider ${isPurchaseMode ? 'text-white/40' : 'text-navblue/40'}`}>
+                                                        {item.price} RWF * {item.quantity} = RWF {(item.price * item.quantity).toLocaleString()}
+                                                    </span>
                                                 </div>
                                             </div>
-                                            <div className="flex flex-col">
-                                                <span className={`font-bold text-base leading-tight ${isPurchaseMode ? 'text-white' : 'text-navblue'}`}>{item.name}</span>
-                                                <span className={`text-xs font-semibold uppercase tracking-wider ${isPurchaseMode ? 'text-white/40' : 'text-navblue/40'}`}>
-                                                    {item.price} RWF * {item.quantity} = RWF {(item.price * item.quantity).toLocaleString()}
-                                                </span>
-                                            </div>
+
+                                            <button
+                                                onClick={(e) => { e.stopPropagation(); removeItem(item.id); }}
+                                                className={`w-8 h-8 rounded-full flex items-center justify-center transition-all active:scale-90 ${isPurchaseMode ? 'bg-white/5 text-white/40 hover:bg-red-500 hover:text-white' : 'bg-navblue/5 text-navblue/40 hover:bg-red-500 hover:text-white'
+                                                    }`}
+                                            >
+                                                <HiX className="text-lg" />
+                                            </button>
                                         </div>
-
-                                        <button
-                                            onClick={(e) => { e.stopPropagation(); removeItem(item.id); }}
-                                            className={`w-8 h-8 rounded-full flex items-center justify-center transition-all active:scale-90 ${isPurchaseMode ? 'bg-white/5 text-white/40 hover:bg-red-500 hover:text-white' : 'bg-navblue/5 text-navblue/40 hover:bg-red-500 hover:text-white'
-                                                }`}
-                                        >
-                                            <HiX className="text-lg" />
-                                        </button>
+                                        {index < activeItems.length - 1 && (
+                                            <div className={`mx-4 border-b ${isPurchaseMode ? 'border-white/5' : 'border-navblue/10'}`}></div>
+                                        )}
                                     </div>
-                                    {index < activeItems.length - 1 && (
-                                        <div className={`mx-4 border-b ${isPurchaseMode ? 'border-white/5' : 'border-navblue/10'}`}></div>
-                                    )}
-                                </div>
-                            ))}
-                        </div>
+                                ))}
+                            </div>
 
-                        <div className="pt-2 sticky bottom-0 pb-2">
-                            <button
-                                onClick={() => {
-                                    if (isPurchaseMode) {
-                                        setIsCartExpanded(false);
-                                        navigate('/purchases/checkout');
-                                    } else {
-                                        setIsCartExpanded(false);
-                                        setIsScanModalOpen(true);
-                                    }
-                                }}
-                                className={`w-full font-black py-4 rounded-3xl shadow-xl active:scale-95 transition-transform flex items-center justify-center space-x-2 ${isPurchaseMode ? 'bg-shuleamber text-navblue' : 'bg-navblue text-white'
-                                    }`}
-                            >
-                                <span>{isPurchaseMode ? 'Submit Inventory Purchase' : 'Complete Sale'}</span>
-                                <span className={`opacity-40 ml-2`}>•</span>
-                                <span>RWF {totalAmount.toLocaleString()}</span>
-                            </button>
+                            <div className="pt-2 sticky bottom-0 pb-2">
+                                <button
+                                    onClick={() => {
+                                        if (isPurchaseMode) {
+                                            setIsCartExpanded(false);
+                                            navigate('/purchases/checkout');
+                                        } else {
+                                            setIsCartExpanded(false);
+                                            setIsScanModalOpen(true);
+                                        }
+                                    }}
+                                    className={`w-full font-black py-4 rounded-3xl shadow-xl active:scale-95 transition-transform flex items-center justify-center space-x-2 ${isPurchaseMode ? 'bg-shuleamber text-navblue' : 'bg-navblue text-white'
+                                        }`}
+                                >
+                                    <span>{isPurchaseMode ? 'Submit Inventory Purchase' : 'Complete Sale'}</span>
+                                    <span className={`opacity-40 ml-2`}>•</span>
+                                    <span>RWF {totalAmount.toLocaleString()}</span>
+                                </button>
+                            </div>
                         </div>
                     </div>
-                </div>
+                )}
             </div>
 
             {/* Main Content Area */}

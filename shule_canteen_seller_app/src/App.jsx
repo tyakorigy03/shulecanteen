@@ -22,6 +22,8 @@ import { PurchaseProvider } from './context/PurchaseContext';
 import PrivateRoute from './components/PrivateRoute';
 import DiscoverPage from './pages/DiscoverPage';
 import AddMenuItem from './pages/AddMenuItem';
+import ViewMenuItemPage from './pages/ViewMenuItemPage';
+import EditMenuItemPage from './pages/EditMenuItemPage';
 
 function App() {
     return (
@@ -34,6 +36,8 @@ function App() {
                             <Route path="/" element={<HomePage />} />
                             <Route path="/listing" element={<ListingPage />} />
                             <Route path="/menu/add-item" element={<AddMenuItem />} />
+                            <Route path="/menu/item/:id" element={<ViewMenuItemPage />} />
+                            <Route path="/menu/edit/:id" element={<EditMenuItemPage />} />
                             <Route path="/sales" element={<SalesPage />} />
                             <Route path="/purchases" element={<PurchasesPage />} />
                             <Route path="/purchases/new" element={<CreatePurchasePage />} />
