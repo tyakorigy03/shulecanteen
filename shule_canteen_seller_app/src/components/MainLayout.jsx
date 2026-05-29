@@ -98,16 +98,22 @@ const MainLayout = () => {
         try {
             let scannedValue = result;
             
-            if (scannedValue.includes('babyeyi.rw')) {
-                const url = new URL(scannedValue);
-                if (url.searchParams.has('student')) {
-                    scannedValue = url.searchParams.get('student');
-                } else if (scannedValue.includes('/v/')) {
-                    const parts = scannedValue.split('/');
-                    scannedValue = parts[parts.length - 1];
-                }
-                if (scannedValue.includes('?')) {
-                    scannedValue = scannedValue.split('?')[0];
+          if (scannedValue.includes('babyeyi.rw')) {
+                try {
+                    const url = new URL(scannedValue);
+
+                    if (url.searchParams.has('student')) {
+                        scannedValue = url.searchParams.get('student');
+                    } else {
+                        const pathParts = url.pathname
+                            .split('/')
+                            .filter(Boolean);
+
+                        scannedValue = pathParts[pathParts.length - 1];
+                    }
+
+                } catch (err) {
+                    console.error('Invalid QR URL');
                 }
             }
             
