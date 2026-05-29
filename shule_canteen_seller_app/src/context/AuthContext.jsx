@@ -68,35 +68,45 @@ export const AuthProvider = ({ children }) => {
         }
     };
 
-    useEffect(() => {
-        const fetchSchoolProfile = async () => {
-            if (user && user.schoolCode) {
-                try {
-                    const snap = await getDoc(
-                        doc(db, 'schools', user.schoolCode, 'data', 'students_manifest')
-                    );
+useEffect(() => {
+    const fetchSchoolProfile = async () => {
+        if (user && user.schoolCode) {
+            try {
+                // 1. Sync latest school data from backend
+                await axios.post(`${API_BASE}/canteen/sync`, {
+                    schoolCode: user.schoolCode
+                });
 
-                    if (snap.exists()) {
-                        const data = snap.data();
-                        if (data.school) {
-                            setSchool(data.school);
-                        } else {
-                            setSchool(null);
-                        }
+                console.log('✅ School sync completed');
+
+                // 2. Fetch fresh Firestore manifest
+                const snap = await getDoc(
+                    doc(db, 'schools', user.schoolCode, 'data', 'students_manifest')
+                );
+
+                if (snap.exists()) {
+                    const data = snap.data();
+
+                    if (data.school) {
+                        setSchool(data.school);
                     } else {
                         setSchool(null);
                     }
-                } catch (err) {
-                    console.error("Error fetching school profile:", err);
+                } else {
                     setSchool(null);
                 }
-            } else {
+
+            } catch (err) {
+                console.error("Error syncing/fetching school profile:", err);
                 setSchool(null);
             }
-        };
+        } else {
+            setSchool(null);
+        }
+    };
 
-        fetchSchoolProfile();
-    }, [user]);
+    fetchSchoolProfile();
+}, [user]);
 
     const logout = () => {
         localStorage.removeItem(`${STORAGE_PREFIX}token`);
