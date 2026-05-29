@@ -4,13 +4,15 @@ import { VITE_PLATFORM } from '../config/api';
 const QRScanner = ({ onScan, onClose }) => {
     const [error, setError] = useState(null);
     const [isScanning, setIsScanning] = useState(false);
+    const [isInstalling, setIsInstalling] = useState(false);
+    const [installProgress, setInstallProgress] = useState(0);
 
     useEffect(() => {
         const isMobile = VITE_PLATFORM === 'mobile' || 
                         (typeof window !== 'undefined' && window.Capacitor?.isNativePlatform());
         
         if (isMobile) {
-            startNativeScanner();
+            initializeNativeScanner();
         } else {
             startWebScanner();
         }
@@ -20,11 +22,52 @@ const QRScanner = ({ onScan, onClose }) => {
         };
     }, []);
 
+    const initializeNativeScanner = async () => {
+        try {
+            const { BarcodeScanner } = await import('@capacitor-mlkit/barcode-scanning');
+            
+            // Check if Google module is available
+            const { available } = await BarcodeScanner.isGoogleBarcodeScannerModuleAvailable();
+            
+            if (!available) {
+                setIsInstalling(true);
+                
+                // Listen for installation progress
+                await BarcodeScanner.addListener('googleBarcodeScannerModuleInstallProgress', (event) => {
+                    console.log('Installation state:', event.state);
+                    // state: 0 = Downloading, 1 = Installing, 2 = Installed, 5 = Failed
+                    if (event.state === 0) {
+                        setInstallProgress(30);
+                    } else if (event.state === 1) {
+                        setInstallProgress(70);
+                    } else if (event.state === 2) {
+                        setInstallProgress(100);
+                        setTimeout(() => {
+                            setIsInstalling(false);
+                            startNativeScanner();
+                        }, 500);
+                    } else if (event.state === 5) {
+                        setError('Failed to install barcode scanner module. Please check your internet connection and try again.');
+                        setIsInstalling(false);
+                    }
+                });
+                
+                // Install the module
+                await BarcodeScanner.installGoogleBarcodeScannerModule();
+            } else {
+                // Module already available, start scanning
+                startNativeScanner();
+            }
+        } catch (err) {
+            console.error("Initialization error:", err);
+            setError(`Failed to initialize scanner: ${err.message}`);
+        }
+    };
+
     const startNativeScanner = async () => {
         try {
             setIsScanning(true);
             
-            // Dynamically import Capacitor ML Kit Barcode Scanner
             const { BarcodeScanner } = await import('@capacitor-mlkit/barcode-scanning');
             
             // Request permissions
@@ -90,11 +133,48 @@ const QRScanner = ({ onScan, onClose }) => {
         }
     };
 
+    // Show installation progress UI
+    if (isInstalling) {
+        return (
+            <div className="relative w-full h-full bg-black flex items-center justify-center rounded-[28px]">
+                <div className="text-center p-6">
+                    <div className="mb-6">
+                        <div className="w-20 h-20 border-4 border-green-500 border-t-transparent rounded-full animate-spin mx-auto"></div>
+                    </div>
+                    <p className="text-white text-lg mb-2">Installing Barcode Scanner...</p>
+                    <p className="text-white/60 text-sm mb-4">This will only happen once</p>
+                    <div className="w-64 bg-white/20 rounded-full h-2 mb-4">
+                        <div 
+                            className="bg-green-500 h-2 rounded-full transition-all duration-300"
+                            style={{ width: `${installProgress}%` }}
+                        ></div>
+                    </div>
+                    <p className="text-white/40 text-xs">Please wait while we download the scanner module</p>
+                    <button 
+                        onClick={onClose}
+                        className="mt-8 bg-red-500 px-6 py-2 rounded-lg text-white"
+                    >
+                        Cancel
+                    </button>
+                </div>
+            </div>
+        );
+    }
+
     if (error) {
         return (
             <div className="relative w-full h-full bg-black flex items-center justify-center rounded-[28px]">
                 <div className="text-white text-center p-4">
                     <p className="mb-4 text-red-400">{error}</p>
+                    <button 
+                        onClick={() => {
+                            setError(null);
+                            initializeNativeScanner();
+                        }}
+                        className="bg-green-500 px-4 py-2 rounded-lg mr-2"
+                    >
+                        Retry
+                    </button>
                     <button 
                         onClick={onClose}
                         className="bg-red-500 px-4 py-2 rounded-lg"
@@ -135,13 +215,19 @@ const QRScanner = ({ onScan, onClose }) => {
                         display: none !important;
                     }
                 `}</style>
+                <button 
+                    onClick={onClose}
+                    className="absolute top-4 right-4 bg-black/50 text-white p-2 rounded-full z-10"
+                >
+                    ✕
+                </button>
             </div>
         );
     }
 
     // For mobile: show scanning UI while native scanner is active
     return (
-        <div className="relative w-full h-full  flex items-center justify-center rounded-[28px]">
+        <div className="relative w-full h-full bg-black flex items-center justify-center rounded-[28px]">
             <div className="text-center">
                 <div className="animate-pulse mb-4">
                     <div className="w-16 h-16 border-4 border-green-500 rounded-full mx-auto"></div>
